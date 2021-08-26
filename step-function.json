@@ -1,0 +1,239 @@
+{
+  "StartAt": "Start - Notify Slack",
+  "States": {
+    "Start - Notify Slack": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-slack-lambda-arn}",
+      "InputPath": "$.inputs.slack_message_start_training",
+      "ResultPath": "$.results.slack_message_start_training",
+      "Next": "Run EMR Data Collection"
+    },
+    "Run EMR Data Collection": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-emr-prepare-training-data-lambda-arn}",
+      "InputPath": "$.inputs.emr_training_data_preparation",
+      "ResultPath": "$.results.data_collection_emr_job_info",
+      "Next": "Wait for EMR Data Collection to complete"
+    },
+    "Wait for EMR Data Collection to complete": {
+      "Type": "Wait",
+      "Seconds": 1320,
+      "Next": "Get status of training data collection"
+    },
+    "Get status of training data collection": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-emr-get-status-lambda-arn}",
+      "InputPath": "$.results.data_collection_emr_job_info",
+      "ResultPath": "$.results.completed_data_collection_job",
+      "Next": "Is data collection completed?"
+    },
+    "Is data collection completed?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.results.completed_data_collection_job.status",
+          "StringEquals": "TERMINATED",
+          "Next": "Create vectorizing job"
+        },
+        {
+          "Variable": "$.results.completed_data_collection_job.status",
+          "StringEquals": "TERMINATED_WITH_ERRORS",
+          "Next": "Fail - Notify Slack"
+        }
+      ],
+      "Default": "Wait for EMR Data Collection to complete"
+    },
+    "Create vectorizing job": {
+        "Type": "Task",
+        "Resource": "${dsci-sagemaker-create-training-job-lambda-arn}",
+        "InputPath": "$.inputs.vectorizing_job",
+        "ResultPath": "$.results.vectorizing_job",
+        "Next": "Wait for vectorizing job to complete"
+      },
+      "Wait for vectorizing job to complete": {
+        "Type": "Wait",
+        "Seconds": 1800,
+        "Next": "Get status of vectorizing job"
+      },
+      "Get status of vectorizing job": {
+        "Type": "Task",
+        "Resource": "${dsci-sagemaker-training-job-status-lambda-arn}",
+        "InputPath": "$.results.vectorizing_job",
+        "ResultPath": "$.results.completed_vectorizing_job",
+        "Next": "Is vectorizing Job completed?"
+      },
+      "Is vectorizing Job completed?": {
+        "Type": "Choice",
+        "Choices": [
+          {
+            "Variable": "$.results.completed_vectorizing_job.status",
+            "StringEquals": "Completed",
+            "Next": "Create training job"
+          },
+          {
+            "Variable": "$.results.completed_vectorizing_job.status",
+            "StringEquals": "Failed",
+            "Next": "Fail - Notify Slack"
+          }
+        ],
+        "Default": "Wait for vectorizing job to complete"
+      },
+      "Create training job": {
+        "Type": "Task",
+        "Resource": "${dsci-sagemaker-create-training-job-lambda-arn}",
+        "InputPath": "$.inputs.training_job",
+        "ResultPath": "$.results.training_job",
+        "Next": "Wait for training job to complete"
+      },
+      "Wait for training job to complete": {
+        "Type": "Wait",
+        "Seconds": 1800,
+        "Next": "Get status of training job"
+      },
+      "Get status of training job": {
+        "Type": "Task",
+        "Resource": "${dsci-sagemaker-training-job-status-lambda-arn}",
+        "InputPath": "$.results.training_job",
+        "ResultPath": "$.results.completed_training_job",
+        "Next": "Is training Job completed?"
+      },
+      "Is training Job completed?": {
+        "Type": "Choice",
+        "Choices": [
+          {
+            "Variable": "$.results.completed_training_job.status",
+            "StringEquals": "Completed",
+            "Next": "Create Sagemaker Model"
+          },
+          {
+            "Variable": "$.results.completed_training_job.status",
+            "StringEquals": "Failed",
+            "Next": "Fail - Notify Slack"
+          }
+        ],
+        "Default": "Wait for training job to complete"
+      },
+      "Create Sagemaker Model": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-create-model-lambda-arn}",
+      "InputPath": "$",
+      "ResultPath": "$.results.created_model",
+      "Next": "Create Sagemaker Endpoint Configuration"
+    },
+    "Create Sagemaker Endpoint Configuration": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-create-endpoint-config-lambda-arn}",
+      "InputPath": "$",
+      "ResultPath": "$.results.endpoint_config",
+      "Next": "Update Sagemaker Endpoint"
+    },
+    "Update Sagemaker Endpoint": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-update-endpoint-lambda-arn}",
+      "InputPath": "$",
+      "ResultPath": "$.results.updated_endpoint",
+      "Next": "Wait for Endpoint to be created/updated"
+    },
+    "Wait for Endpoint to be created/updated": {
+      "Type": "Wait",
+      "Seconds": 120,
+      "Next": "Check Endpoint Status"
+    },
+    "Check Endpoint Status": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-get-endpoint-status-lambda-arn}",
+      "InputPath": "$.results.updated_endpoint",
+      "ResultPath": "$.results.endpoint_status",
+      "Next": "Is Endpoint In Service?"
+    },
+    "Is Endpoint In Service?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.results.endpoint_status.status",
+          "StringEquals": "InService",
+          "Next": "Test Sagemaker Endpoint"
+        },
+        {
+          "Variable": "$.results.endpoint_status.status",
+          "StringEquals": "Failed",
+          "Next": "Fail - Notify Slack"
+        }
+      ],
+      "Default": "Wait for Endpoint to be created/updated"
+    },
+    "Test Sagemaker Endpoint": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-invoke-endpoint-lambda-arn}",
+      "InputPath": "$.inputs.invoke_endpoint",
+      "ResultPath": "$.results.invoke_endpoint_status",
+      "Next": "Is Endpoint available?"
+    },
+    "Is Endpoint available?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.results.invoke_endpoint_status.success",
+          "BooleanEquals": true,
+          "Next": "Bookmark Endpoint Configuration"
+        },
+        {
+          "Variable": "$.results.invoke_endpoint_status.success",
+          "BooleanEquals": false,
+          "Next": "Slack- Rollback Notification"
+        }
+      ],
+      "Default": "Wait for Endpoint to be created/updated"
+    },
+    "Bookmark Endpoint Configuration": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-bookmark-endpoint-config-arn}",
+      "InputPath": "$.inputs.endpoint",
+      "ResultPath": "$.results.bookmark_endpoint_status",
+      "Next": "Create Cloudwatch Monitoring"
+    },
+    "Create Cloudwatch Monitoring": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-create-cloudwatch-alarms-lambda-arn}",
+      "InputPath": "$.results.endpoint_status",
+      "ResultPath": "$.results.monitoring_status",
+      "Next": "Auto Scale Sagemaker Endpoint"
+    },
+    "Auto Scale Sagemaker Endpoint": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-apply-auto-scaling-arn}",
+      "InputPath": "$.inputs.endpoint_auto_scaling",
+      "ResultPath": "$.results.endpoint_auto_scaling",
+      "Next": "Finish - Notify Slack"
+    },
+    "Slack- Rollback Notification": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-rollback-endpoint-arn}",
+      "InputPath": "$.inputs.endpoint",
+      "ResultPath": "$.results.rollback_endpoint_status",
+      "Next": "Rollback Sagemaker Endpoint"
+    },
+    "Rollback Sagemaker Endpoint": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-slack-lambda-arn}",
+      "InputPath": "$.inputs.slack_message_rollback_notification",
+      "ResultPath": "$.results.slack_message_rollback_notification",
+      "Next": "Wait for Endpoint to be created/updated"
+    },
+    "Finish - Notify Slack": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-slack-lambda-arn}",
+      "InputPath": "$.inputs.slack_message_finish",
+      "End": true
+    },
+    "Fail - Notify Slack": {
+      "Type": "Task",
+      "Resource": "${dsci-sagemaker-slack-lambda-arn}",
+      "InputPath": "$.inputs.slack_message_fail",
+      "Next": "Failed training"
+    },
+    "Failed training" : {
+      "Type": "Fail"
+    }
+  }
+}
